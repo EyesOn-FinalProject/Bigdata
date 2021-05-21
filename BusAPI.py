@@ -3,7 +3,7 @@ import requests, xmltodict, json
 import pandas as pd
 import time
 
-#  함수 생성 ===================================================================================================
+# 함수 생성 ===================================================================================================
 def position(x, y, r):
     url = f'http://ws.bus.go.kr/api/rest/stationinfo/getStationByPos?ServiceKey={key}&tmX={x}&tmY={y}&radius={r}' # 서울특별시_정류소정보조회 서비스 中 7_getStaionsByPosList
     content = requests.get(url).content
@@ -55,7 +55,7 @@ def arriveMessage(target_stId, target_busRouteId, target_ord):
     return (arrival, arrival2, busLicenseNum, nextstation)
 
 def noticeOneMinute(arrival):
-    freeTime = 60  # 스마트 글래스 켜지기 시작하는 시간 (협의하여 결정, 실제 코드가 돌아가고 사용자에게 전달될때까지 시스템에서 소요되는 시간이 어느정도인지 고려해야 할듯)
+    freeTime = 90  # 스마트 글래스 켜지기 시작하는 시간 (협의하여 결정, 실제 코드가 돌아가고 사용자에게 전달될때까지 시스템에서 소요되는 시간이 어느정도인지 고려해야 할듯)
     indexMinute = arrival.find('분')
     indexSecond = arrival.find('초')
     # find 이용 시, 문자열이 없으면 -1 리턴되는것을 이용
@@ -69,8 +69,9 @@ def noticeOneMinute(arrival):
     time.sleep(k)
     finalResult = arriveMessage(target_stId, target_busRouteId, target_ord)
     finalArrival = finalResult[0]
+    msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
 
-    return finalArrival
+    return (finalArrival, msgFinal)
 # ===================================================================================================
 # MQTT를 통해 id, latitude, longitude, busNum 받음
 
@@ -78,8 +79,8 @@ def noticeOneMinute(arrival):
 key = 'kNSQvU5WeosgTXwCx1mTthdz93%2BlLXHKA7ZtzbuNArBuUVVP4akW5xsfp6R5JYuMH106DwcuJRTqXJHI4q%2BNjA%3D%3D'
 
 # 사용자의 위치를 받아서 tmX, tmY 변수에 지정 우선 임시 지정)
-tmX = 126.9233021 # 경도(double) = longitude
-tmY = 37.55639751 # 위도(double) = latitude
+tmX = 127.0557255 # 경도(double) = longitude 강남 07/37.5095603/127.0557255 (126.9233021, 37.55639751)
+tmY = 37.5095603 # 위도(double) = latitude
 radius = 100 # 범위 (넓히면 여러 정류장 인식 됨.)
 
 station = position(tmX,tmY,radius) # 튜플
@@ -97,7 +98,7 @@ print(target_msgStation) # 사용자에게 주는 메시지
 data1 = pd.read_csv('data/busnumber_to_busRouteid.csv')
 
 # 음성인식을 통해 사용자가 5714번 탄다고 가정했음.
-target_bus = '5714' # busNum, str 형태로 해야됨. -> 엑셀이 str 형태
+target_bus = '2415' # busNum, str 형태로 해야됨. -> 엑셀이 str 형태
 
 result_ordSearch = ordSearch(target_bus, target_arsId)
 target_busRouteId = result_ordSearch[0]
@@ -122,5 +123,6 @@ print(nextstation) # 다음 정류장
 
 result_noticeOneMinute = noticeOneMinute(arrival) # 이거 돌아갈 때, 1분 남을때까지 해당 파일 실행되지않고, timesleep함을 기억
 finalArrival = result_noticeOneMinute[0]
+msgFinal = result_noticeOneMinute[1]
 print(finalArrival)
-
+print(msgFinal)
