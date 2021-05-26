@@ -2,6 +2,7 @@
 import requests, xmltodict, json
 import pandas as pd
 import time
+import threading
 
 # 함수 생성 ===================================================================================================
 def position(x, y, r):
@@ -66,22 +67,41 @@ def noticeOneMinute(arrival):
     else:
         k = int(arrival[0:indexMinute]) * 60 + int(arrival[indexMinute + 1:indexSecond]) - freeTime
 
+    print("sleep 전")
     time.sleep(k)
+    print("sleep 후")
     finalResult = arriveMessage(target_stId, target_busRouteId, target_ord)
-    finalArrival = finalResult[0]
-    msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
+
+    global finalArrival
+    global msgFinal
+
+    if finalResult[0] == "곧 도착":
+        finalArrival = "잠시 후"
+        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
+    else:
+        finalArrival = finalResult[0]
+        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
 
     return (finalArrival, msgFinal)
+
+def noticeOneMinute_thread():
+    thread=threading.Thread(target=noticeOneMinute, args=(arrival,))
+    thread.daemon = True
+    thread.start()
+    # print("쓰레드 스타트 후 이게 언제 출력될까?") # 함수 끝나기 전에 바로 출력됨..
 # ===================================================================================================
 # MQTT를 통해 id, latitude, longitude, busNum 받음
 
 # 공공 API 활용 KEY
-key = 'kNSQvU5WeosgTXwCx1mTthdz93%2BlLXHKA7ZtzbuNArBuUVVP4akW5xsfp6R5JYuMH106DwcuJRTqXJHI4q%2BNjA%3D%3D'
+key = 'AT98N5LWRAir0I67tVgrf6Vfnio9LCMcwusSbOjmdkEpSOGyobdyAq9cb41G6O4pgTp6Jcmpv8e87bplMNY7tQ%3D%3D'
 
 # 사용자의 위치를 받아서 tmX, tmY 변수에 지정 우선 임시 지정)
-tmX = 127.0557255 # 경도(double) = longitude 강남 07/37.5095603/127.0557255 (126.9233021, 37.55639751)
-tmY = 37.5095603 # 위도(double) = latitude
+tmX = 126.948099 # 경도(double) = longitude/
+tmY = 37.541111  # 위도(double) = latitude
 radius = 100 # 범위 (넓히면 여러 정류장 인식 됨.)
+
+# 강남 07/37.5095603/127.0557255
+# 마포역 126.948099/37.541111
 
 station = position(tmX,tmY,radius) # 튜플
 
@@ -97,8 +117,7 @@ print(target_msgStation) # 사용자에게 주는 메시지
 # ===================================================================================================
 data1 = pd.read_csv('data/busnumber_to_busRouteid.csv')
 
-# 음성인식을 통해 사용자가 5714번 탄다고 가정했음.
-target_bus = '2415' # busNum, str 형태로 해야됨. -> 엑셀이 str 형태
+target_bus = '260'
 
 result_ordSearch = ordSearch(target_bus, target_arsId)
 target_busRouteId = result_ordSearch[0]
@@ -109,6 +128,7 @@ print(target_ord)
 # 에러 시 멈추고, 사용자에게 전해주는 코드 작성하기.
 if target_busRouteId == "error":
     aaa = 1 # 다시 전송하는 코드 넣어야 할듯...?
+    print("버스 번호 제대로 인식 못함.")
 
 result_arriveMessage = arriveMessage(target_stId, target_busRouteId, target_ord)
 arrival = result_arriveMessage[0]
@@ -121,8 +141,10 @@ print(arrival2) # 두 번째 버스 도착 예정 시간
 print(busLicenseNum) # 버스 차량 번호
 print(nextstation) # 다음 정류장
 
-result_noticeOneMinute = noticeOneMinute(arrival) # 이거 돌아갈 때, 1분 남을때까지 해당 파일 실행되지않고, timesleep함을 기억
-finalArrival = result_noticeOneMinute[0]
-msgFinal = result_noticeOneMinute[1]
-print(finalArrival)
-print(msgFinal)
+noticeOneMinute_thread()
+
+# result_noticeOneMinute = noticeOneMinute(arrival) # timesleep함을 기억
+# finalArrival = result_noticeOneMinute[0]
+# msgFinal = result_noticeOneMinute[1]
+# print(finalArrival)
+# print(msgFinal)
