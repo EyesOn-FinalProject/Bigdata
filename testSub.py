@@ -4,6 +4,8 @@ import pandas as pd
 import paho.mqtt.publish as publish
 import threading
 import time
+import re
+from urllib.parse import urlparse
 
 """
 on_connect는 subscriber가 브로커에 연결하면서 호출할 함수
@@ -16,19 +18,19 @@ key = 'AT98N5LWRAir0I67tVgrf6Vfnio9LCMcwusSbOjmdkEpSOGyobdyAq9cb41G6O4pgTp6Jcmpv
 radius = 100  # 범위 (넓히면 여러 정류장 인식 됨.)
 data1 = pd.read_csv('C:\\hju\\PYTHONexam\\data\\busnumber_to_busRouteid.csv') # 경로 설정
 
-# 전역변수로 NULL값
-target_stId = None
-target_stationName = None
-target_arsId = None
-target_msgStation = None
-target_busRouteId = None
-target_ord = None
-arrival = None
-arrival2 = None
-busLicenseNum = None
-nextstation = None
-finalArrival = None
-msgFinal = None
+# # 전역변수로 NULL값
+# target_stId = None
+# target_stationName = None
+# target_arsId = None
+# target_msgStation = None
+# target_busRouteId = None
+# target_ord = None
+# arrival = None
+# arrival2 = None
+# busLicenseNum = None
+# finalArrival = None
+# msgFinal = None
+# uuid = None
 
 # 빅데이터 함수
 #  함수 생성 ===================================================================================================
@@ -41,9 +43,9 @@ def position(x, y, r):
     target_stId = int(dict['ServiceResult']['msgBody']['itemList'][0]['stationId'])
     target_stationName = str(dict['ServiceResult']['msgBody']['itemList'][0]['stationNm'])
     target_arsId = str(dict['ServiceResult']['msgBody']['itemList'][0]['arsId'])
-    msgStation = "현재 인식된 정류장은 " + target_stationName + " 입니다."
+    target_msgStation = "현재 인식된 정류장은 " + target_stationName + " 입니다."
 
-    return (target_stId, target_stationName, target_arsId, msgStation)
+    return (target_stId, target_stationName, target_arsId, target_msgStation)
 
 def ordSearch(target_bus, target_arsId):
     try:
@@ -75,13 +77,18 @@ def arriveMessage(target_stId, target_busRouteId, target_ord):
     arrival = dict['ServiceResult']['msgBody']['itemList']['arrmsg1']
     arrival2 = dict['ServiceResult']['msgBody']['itemList']['arrmsg2']
     busLicenseNum = dict['ServiceResult']['msgBody']['itemList']['plainNo1']
-    nextstation = dict['ServiceResult']['msgBody']['itemList']['stationNm1']
+    busLicenseNum = busLicenseNum[-4:]
 
-    return (arrival, arrival2, busLicenseNum, nextstation)
+    if arrival == "곧 도착":
+        msgArrival = "해당 버스는 전 정류장에서 출발하여 1분 이내 도착합니다."
+    else:
+        index_minute = arrival.find('분')
+        msgArrival = "해당 버스는 약 " + arrival[0:index_minute+1] + " 후 도착합니다. 승차 직전 다시 알림을 주겠습니다."
 
+    return (arrival, arrival2, busLicenseNum, msgArrival)
 
-def noticeOneMinute(arrival):
-    freeTime = 90  # 스마트 글래스 켜지기 시작하는 시간 (협의하여 결정, 실제 코드가 돌아가고 사용자에게 전달될때까지 시스템에서 소요되는 시간이 어느정도인지 고려해야 할듯)
+def noticeOneMinute(arrival, uuid):
+    freeTime = 60  # 스마트 글래스 켜지기 시작하는 시간 (협의하여 결정, 실제 코드가 돌아가고 사용자에게 전달될때까지 시스템에서 소요되는 시간이 어느정도인지 고려해야 할듯)
     indexMinute = arrival.find('분')
     indexSecond = arrival.find('초')
     # find 이용 시, 문자열이 없으면 -1 리턴되는것을 이용
@@ -92,29 +99,123 @@ def noticeOneMinute(arrival):
     else:
         k = int(arrival[0:indexMinute]) * 60 + int(arrival[indexMinute + 1:indexSecond]) - freeTime
 
+    waiting_stId = target_stId
+    waiting_busRouteId = target_busRouteId
+    waiting_ord = target_ord
     print("sleep 전")
+    print(k, "초 기다려야 함")
+    k = 10
     time.sleep(k)
     print("sleep 후")
-    finalResult = arriveMessage(target_stId, target_busRouteId, target_ord)
-
+    finalResult = arriveMessage(waiting_stId, waiting_busRouteId, waiting_ord)
     global finalArrival, msgFinal
 
     if finalResult[0] == "곧 도착":
-        global finalArrival, msgFinal
         finalArrival = "잠시 후"
         msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
     else:
-        global finalArrival, msgFinal
         finalArrival = finalResult[0]
+        # index_hu = finalArrival
         msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
 
-    #함수 내에서 퍼블리쉬 할 수 있는지 확인하여 추가하기
+    print("직전에 다시 예상한 도착시간:", finalArrival)
+    print("직전 사용자 알림:", msgFinal)
+
+    publish.single("eyeson/" + uuid, "bigData/last/" + msgFinal,
+                   hostname="15.164.46.54")  # 데이터 전송
+
     return (finalArrival, msgFinal)
 
-def noticeOneMinute_thread():
-    thread=threading.Thread(target=noticeOneMinute, args=(arrival,))
+def noticeOneMinute_thread(arrival, uuid):
+    thread=threading.Thread(target=noticeOneMinute, args=(arrival, uuid))
     thread.daemon = True
     thread.start()
+
+# 목적지명 기능 관련 함수
+
+def allBusnum(target_arsId):
+    busList = []
+    url = f'http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid?ServiceKey={key}&arsId={target_arsId}'
+    content = requests.get(url).content
+    dict = xmltodict.parse(content)
+
+    for i in range(0, len(dict['ServiceResult']['msgBody']['itemList'])):
+        busList.append(dict['ServiceResult']['msgBody']['itemList'][i]['busRouteId'])
+
+    return busList # 특정 정류장에 오는 모든 버스
+
+def theBusnum(arrivalStation, busList):
+    thebuslist = []
+
+    for i in range(0, len(busList)):
+        url = f'http://ws.bus.go.kr/api/rest/busRouteInfo/getStaionByRoute?ServiceKey={key}&busRouteId={busList[i]}'
+        content = requests.get(url).content
+        dict = xmltodict.parse(content)
+
+        buslinelist = []  # 특정 버스의 노선 목록
+        for i in range(0, len(dict['ServiceResult']['msgBody']['itemList'])):
+            buslinelist.append(dict['ServiceResult']['msgBody']['itemList'][i]['stationNm'])
+
+        if arrivalStation in buslinelist:
+            thebuslist.append(dict['ServiceResult']['msgBody']['itemList'][i]['busRouteId'])
+
+    return thebuslist  # arrivalStation 경유하는 버스 ID
+
+# 비정상 상황에서도 오류가 나지않고, 빈 리스트로 리턴됨 -> 후 에러처리에 사용됨.
+def searchLicenseNum(arrivalStation, busList):
+    busplain = []
+
+    for i in range(0, len(busList)):
+        url = f'http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRouteAll?ServiceKey={key}&busRouteId={busList[i]}'
+        content = requests.get(url).content
+        dict = xmltodict.parse(content)
+
+        buslinelists = []  # 특정 버스의 노선 목록
+        for i in range(0, len(dict['ServiceResult']['msgBody']['itemList'])):
+            buslinelists.append(dict['ServiceResult']['msgBody']['itemList'][i]['stNm'])
+
+        if arrivalStation in buslinelists:
+            busplain.append(dict['ServiceResult']['msgBody']['itemList'][i]['plainNo1'])
+
+    return busplain
+
+
+def waiting(target_arsId, thebuslist):
+    url = f'http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid?ServiceKey={key}&arsId={target_arsId}'
+    content = requests.get(url).content
+    dict = xmltodict.parse(content)
+
+    waitingBusnum = []
+    waitingTime = []
+    for i in range(0, len(dict['ServiceResult']['msgBody']['itemList'])):
+        if dict['ServiceResult']['msgBody']['itemList'][i]['busRouteId'] in thebuslist:
+            x = dict['ServiceResult']['msgBody']['itemList'][i]['rtNm']
+            y = dict['ServiceResult']['msgBody']['itemList'][i]['arrmsg1']
+            waitingBusnum.append(x)
+            waitingTime.append(y)
+    return(waitingBusnum, waitingTime) # 버스 번호, 남은 시간
+
+def waitdeep(a):
+    x = []
+    for i in a:
+        if i == '곧 도착':
+            i = 0
+            x.append(i)
+        elif i == '운행종료':
+            i = 9999
+            x.append(i)
+        else:
+            i = i.split('[')[0]
+            index_first = i.find('분')
+            index_two = i.find('초')
+            i_essence = i[0:index_first]
+            if index_two == -1:
+                i_decimal = 0
+            else:
+                i_decimal = i[index_first+1:index_two]
+            i = float(i_essence) * 1 + float(i_decimal) * 0.01
+            x.append(float(i))
+    return x
 
 def on_connect(client, userdata, flags, rc):
     print("connect.." + str(rc))
@@ -126,62 +227,126 @@ def on_connect(client, userdata, flags, rc):
 
 # 메시지가 도착됐을때 처리할 일들 - 여러가지 장비 제어하기, Mongodb에 저장
 def on_message(client, userdata, msg):
-    myval = msg.payload.decode("utf-8")
-    myval = myval.replace(" ", "")
-    myval = myval.split("/")
-    print(myval)
-    if myval[0] == "riding":
-        uuid = myval[1]
-        busNum = myval[2]
-        latitude = myval[3]  # 위도
-        longitude = myval[4]  # 경도
+    try:
+        myval = msg.payload.decode("utf-8")
+        myval = myval.replace(" ", "")
+        myval = myval.split("/")
+        mytopic = msg.topic.split("/")
+        print(myval)
+        uuid = mytopic[1]
+        print(uuid)
+        # try except에서 1보다 작은게 들어올 때 오류나는 문제 해결.
+        if myval[0] == "android":
+            if myval[1] == "riding":
+                busNum = myval[2] ## 버스번호 or 목적지명
+                latitude = myval[3]  # 위도
+                longitude = myval[4]  # 경도
 
-        station = position(longitude, latitude, radius)  # 튜플
+                station = position(longitude, latitude, radius)  # 튜플
 
-        target_stId = station[0]  # 밑 함수에서 쓰임.
-        target_stationName = station[1]
-        target_arsId = station[2]
-        target_msgStation = station[3]
-        print(target_stId)  # 정류장 ID
-        print(target_stationName)  # 정류장 이름
-        print(target_arsId)  # 정류장 고유번호
-        print(target_msgStation)  # 사용자에게 주는 메시지
+                global target_stId, target_stationName, target_arsId, target_msgStation
+                target_stId = station[0]  # 밑 함수에서 쓰임.
+                target_stationName = station[1]
+                target_arsId = station[2]
+                target_msgStation = station[3]
+                print("정류장 ID:", target_stId)  # 정류장 ID
+                print("정류장 이름:", target_stationName)  # 정류장 이름
+                print("정류장 고유번호:",target_arsId)  # 정류장 고유번호
+                print("사용자 메시지:", target_msgStation)  # 사용자에게 주는 메시지
 
-        # ===================================================================================================
+                # 여기까지는 두 가지 모두 똑같음
+                # ===================================================================================================
+                global target_bus, target_busRouteId, target_ord
+                target_bus = busNum  # str, 버스번호 or 목적지명 들어옴
 
-        target_bus = busNum  # busNum, str 형태로 해야됨. -> 엑셀이 str 형태
+                result_ordSearch = ordSearch(target_bus, target_arsId)
+                target_busRouteId = result_ordSearch[0]
+                target_ord = result_ordSearch[1]
+                print("버스 고유번호:",target_busRouteId)
+                print("해당 정류장 순번:",target_ord)
 
-        result_ordSearch = ordSearch(target_bus, target_arsId)
-        target_busRouteId = result_ordSearch[0]
-        target_ord = result_ordSearch[1]
-        print(target_busRouteId)
-        print(target_ord)
+                # 에러 시 멈추고, 사용자에게 전해주는 코드 작성하기.
+                if target_busRouteId == "error":
+                    print("버스번호가 아님. 목적지명이거나 정류장에 없는 버스번호임")
+                    # 넘어오는 변수 target_busRouteId -> "error", target_ord -> "해당버스번호가 존재하지 않습니다."
+                    # busFindStatus = "bigData/error/" # 체크
 
-        # 에러 시 멈추고, 사용자에게 전해주는 코드 작성하기.
-        if target_busRouteId == "error":
-            aaa = 1
-            busFindStatus = "bigData/error/"
-            publish.single("eyeson/busTime", busFindStatus + uuid, hostname="15.164.46.54")  # 데이터 전송
-        else:
-            result_arriveMessage = arriveMessage(target_stId, target_busRouteId, target_ord)
-            arrival = result_arriveMessage[0]
-            arrival2 = result_arriveMessage[1]
-            busLicenseNum = result_arriveMessage[2]
-            nextstation = result_arriveMessage[3]
-            busFindStatus = "bigData/ok/"
+                    busList = allBusnum(target_arsId)
+                    print("출발 정류장에 들어오는 모든 버스: ", busList)
 
-            print(arrival)  # 첫 번째 버스 도착 예정 시간
-            print(arrival2)  # 두 번째 버스 도착 예정 시간
-            print(busLicenseNum)  # 버스 차량 번호
-            print(nextstation)  # 다음 정류장
-            publish.single("eyeson/busTime", busFindStatus + uuid + "/" + busNum + "/" + arrival,
-                           hostname="15.164.46.54")  # 데이터 전송
-            time.sleep(2)
-            noticeOneMinute_thread()
-            # publish.single("eyeson/busTime", "bigData/ok/" + uuid + "/" + msgFinal,
-            #                hostname="15.164.46.54")  # 데이터 전송
-            # print(finalArrival)
-            # print(msgFinal)
+                    arrivalStation = target_bus # ex) 당산역 , or 오류나는 데이터. (잘못된 정류장 명 또는 버스 번호)
+                    thebuslist = theBusnum(arrivalStation, busList)
+                    print("도착 정류장에 해당하는 모든 버스: ", thebuslist)
+
+                    if thebuslist == []:
+                        lastErrorMsg = "정류소에 없는 버스번호 또는 존재하지 않은 정류소명을 말하셨습니다."
+                        publish.single("eyeson/" + uuid,
+                                       "bigData/error/" + uuid + "/" + lastErrorMsg,
+                                       hostname="15.164.46.54")  # 데이터 전송
+                        # publish 어떤 거 줄지 생각.
+
+                    else:
+                        print("오류없이 잘 빠져나옴. 마지막 else단계")
+                        waitingBusnum, waitingTime = waiting(target_arsId, thebuslist)
+                        print("후보 버스 리스트: ", waitingBusnum)
+                        print("후보 버스들의 남은 시간: ", waitingTime)
+
+                        x = waitdeep(waitingTime)
+                        destinationBus = waitingBusnum[(x.index(min(x)))]
+                        destinationBusArrival = waitingTime[(x.index(min(x)))]
+                        print("가장 빨리오는 버스 (최종):", destinationBus)
+                        print("최종 버스 도착시간:", destinationBusArrival)
+
+                        target_bus = destinationBus  # str, 버스번호 or 목적지명 들어옴
+                        print("가장 빠른 버스 찾고 타켓버스로 지정", target_bus)
+
+                        result_ordSearch = ordSearch(target_bus, target_arsId)
+                        target_busRouteId = result_ordSearch[0]
+                        target_ord = result_ordSearch[1]
+                        print("버스 고유번호:", target_busRouteId)
+                        print("해당 정류장 순번:", target_ord)
+
+                        result_arriveMessage = arriveMessage(target_stId, target_busRouteId, target_ord)
+                        # global 지움
+                        arrival = result_arriveMessage[0]
+                        arrival2 = result_arriveMessage[1]
+                        busLicenseNum = result_arriveMessage[2]
+                        msgArrival = result_arriveMessage[3]
+                        busFindStatus = "bigData/ok/"
+
+                        print("도착예정시간:", arrival)  # 첫 번째 버스 도착 예정 시간
+                        print("두번째 버스 도착 예정 시간:", arrival2)  # 두 번째 버스 도착 예정 시간
+                        print("차량 번호:", busLicenseNum)  # 버스 차량 번호
+                        print("사용자 메시지:", msgArrival)
+
+                        print("버스넘버 확인", destinationBus)
+                        publish.single("eyeson/" + uuid,
+                                       busFindStatus + uuid + "/" + destinationBus + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName,
+                                       hostname="15.164.46.54")  # 데이터 전송
+                        time.sleep(1)
+                        noticeOneMinute_thread(arrival, uuid)
+
+
+                else:
+                    result_arriveMessage = arriveMessage(target_stId, target_busRouteId, target_ord)
+                    # global 지움
+                    arrival = result_arriveMessage[0]
+                    arrival2 = result_arriveMessage[1]
+                    busLicenseNum = result_arriveMessage[2]
+                    msgArrival = result_arriveMessage[3]
+                    busFindStatus = "bigData/ok/"
+
+                    print("도착예정시간:",arrival)  # 첫 번째 버스 도착 예정 시간
+                    print("두번째 버스 도착 예정 시간:",arrival2)  # 두 번째 버스 도착 예정 시간
+                    print("차량 번호:",busLicenseNum)  # 버스 차량 번호
+                    print("사용자 메시지:", msgArrival)
+
+                    publish.single("eyeson/" + uuid, busFindStatus + uuid + "/" + busNum + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName,
+                                   hostname="15.164.46.54")  # 데이터 전송
+                    time.sleep(1)
+                    noticeOneMinute_thread(arrival, uuid)
+    except:
+        pass
 
 
 mqttClient = mqtt.Client()  # 클라이언트 객체 생성
