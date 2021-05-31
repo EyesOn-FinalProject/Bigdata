@@ -122,7 +122,6 @@ target_bus = '260'
 result_ordSearch = ordSearch(target_bus, target_arsId)
 target_busRouteId = result_ordSearch[0]
 target_ord = result_ordSearch[1]
-print(tearget_busRoutId)
 print(target_ord)
 
 # 에러 시 멈추고, 사용자에게 전해주는 코드 작성하기.

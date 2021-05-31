@@ -16,7 +16,7 @@ rc가 0이면 정상접속이 됐다는 의미
 # 전역변수
 key = 'AT98N5LWRAir0I67tVgrf6Vfnio9LCMcwusSbOjmdkEpSOGyobdyAq9cb41G6O4pgTp6Jcmpv8e87bplMNY7tQ%3D%3D'
 radius = 100  # 범위 (넓히면 여러 정류장 인식 됨.)
-data1 = pd.read_csv('C:\\hju\\PYTHONexam\\data\\busnumber_to_busRouteid.csv') # 경로 설정
+data1 = pd.read_csv('C:\\eyeson\\Bigdata\\data\\busnumber_to_busRouteid.csv') # 경로 설정
 
 # 빅데이터 함수
 #  함수 생성 ===================================================================================================
