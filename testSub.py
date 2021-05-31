@@ -18,20 +18,6 @@ key = 'AT98N5LWRAir0I67tVgrf6Vfnio9LCMcwusSbOjmdkEpSOGyobdyAq9cb41G6O4pgTp6Jcmpv
 radius = 100  # 범위 (넓히면 여러 정류장 인식 됨.)
 data1 = pd.read_csv('C:\\hju\\PYTHONexam\\data\\busnumber_to_busRouteid.csv') # 경로 설정
 
-# # 전역변수로 NULL값
-# target_stId = None
-# target_stationName = None
-# target_arsId = None
-# target_msgStation = None
-# target_busRouteId = None
-# target_ord = None
-# arrival = None
-# arrival2 = None
-# busLicenseNum = None
-# finalArrival = None
-# msgFinal = None
-# uuid = None
-
 # 빅데이터 함수
 #  함수 생성 ===================================================================================================
 def position(x, y, r):
@@ -66,7 +52,6 @@ def ordSearch(target_bus, target_arsId):
         errorMsg = "해당 버스번호가 존재하지 않습니다."
 
         return (occurError, errorMsg)
-# 에러날 수 있는 요소: 1) 아예 버스 번호가 없는 경우, 2) 해당 정류소에 없는 버스 번호.
 
 def arriveMessage(target_stId, target_busRouteId, target_ord):
     url = f'http://ws.bus.go.kr/api/rest/arrive/getArrInfoByRoute?ServiceKey=' \
@@ -80,15 +65,15 @@ def arriveMessage(target_stId, target_busRouteId, target_ord):
     busLicenseNum = busLicenseNum[-4:]
 
     if arrival == "곧 도착":
-        msgArrival = "해당 버스는 전 정류장에서 출발하여 1분 이내 도착합니다."
+        msgArrival = "전 정류장에서 출발하여 1분 이내 도착합니다."
     else:
         index_minute = arrival.find('분')
-        msgArrival = "해당 버스는 약 " + arrival[0:index_minute+1] + " 후 도착합니다. 승차 직전 다시 알림을 주겠습니다."
+        msgArrival = "약 " + arrival[0:index_minute+1] + " 후 도착합니다. 승차 직전 다시 알림을 주겠습니다."
 
     return (arrival, arrival2, busLicenseNum, msgArrival)
 
-def noticeOneMinute(arrival, uuid):
-    freeTime = 60  # 스마트 글래스 켜지기 시작하는 시간 (협의하여 결정, 실제 코드가 돌아가고 사용자에게 전달될때까지 시스템에서 소요되는 시간이 어느정도인지 고려해야 할듯)
+def noticeOneMinute(arrival, uuid, target_stId, target_busRouteId, target_ord):
+    freeTime = 60  # 여유시간
     indexMinute = arrival.find('분')
     indexSecond = arrival.find('초')
     # find 이용 시, 문자열이 없으면 -1 리턴되는것을 이용
@@ -103,20 +88,18 @@ def noticeOneMinute(arrival, uuid):
     waiting_busRouteId = target_busRouteId
     waiting_ord = target_ord
     print("sleep 전")
-    print(k, "초 기다려야 함")
-    k = 10
+    print(arrival, "인데", k, "초 기다려야 함")
     time.sleep(k)
     print("sleep 후")
     finalResult = arriveMessage(waiting_stId, waiting_busRouteId, waiting_ord)
-    global finalArrival, msgFinal
-
+    ### global finalArrival, msgFinal ###
     if finalResult[0] == "곧 도착":
         finalArrival = "잠시 후"
-        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
+        time.sleep(3) # 음성인식 안겹치게 3초 추가
+        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다."
     else:
         finalArrival = finalResult[0]
-        # index_hu = finalArrival
-        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다. 탑승을 준비해주세요. "
+        msgFinal = "버스가 " + str(finalArrival) + " 도착합니다."
 
     print("직전에 다시 예상한 도착시간:", finalArrival)
     print("직전 사용자 알림:", msgFinal)
@@ -126,8 +109,8 @@ def noticeOneMinute(arrival, uuid):
 
     return (finalArrival, msgFinal)
 
-def noticeOneMinute_thread(arrival, uuid):
-    thread=threading.Thread(target=noticeOneMinute, args=(arrival, uuid))
+def noticeOneMinute_thread(arrival, uuid,  target_stId, target_busRouteId, target_ord):
+    thread=threading.Thread(target=noticeOneMinute, args=(arrival, uuid,  target_stId, target_busRouteId, target_ord))
     thread.daemon = True
     thread.start()
 
@@ -235,8 +218,32 @@ def on_message(client, userdata, msg):
         print(myval)
         uuid = mytopic[1]
         print(uuid)
+        msg = None
         # try except에서 1보다 작은게 들어올 때 오류나는 문제 해결.
         if myval[0] == "android":
+            if myval[1] == "busTime":
+                target_stId = int(myval[2])
+                target_busRouteId = int(myval[3])
+                target_ord = int(myval[4])
+                resultBusTime = arriveMessage(target_stId, target_busRouteId, target_ord)
+                msgArrival = resultBusTime[3]
+                indexsin = msgArrival.find("승")
+                msgArrival = msgArrival[0:indexsin]
+                print(msgArrival)
+                publish.single("eyeson/" + uuid, "bigData/busTime/" + msgArrival, hostname="15.164.46.54")
+
+            if myval[1] == "busStation":
+                print("들어옴")
+                latitude = myval[2]  # 위도
+                longitude = myval[3]  # 경도
+                station = position(longitude, latitude, radius)  # 튜플
+                print("돌아감")
+                target_stationName = station[1]
+                print(target_stationName)
+                print(uuid)
+                publish.single("eyeson/" +uuid, "bigData/busStation/" + target_stationName, hostname="15.164.46.54")
+
+
             if myval[1] == "riding":
                 busNum = myval[2] ## 버스번호 or 목적지명
                 latitude = myval[3]  # 위도
@@ -244,7 +251,6 @@ def on_message(client, userdata, msg):
 
                 station = position(longitude, latitude, radius)  # 튜플
 
-                global target_stId, target_stationName, target_arsId, target_msgStation
                 target_stId = station[0]  # 밑 함수에서 쓰임.
                 target_stationName = station[1]
                 target_arsId = station[2]
@@ -256,7 +262,6 @@ def on_message(client, userdata, msg):
 
                 # 여기까지는 두 가지 모두 똑같음
                 # ===================================================================================================
-                global target_bus, target_busRouteId, target_ord
                 target_bus = busNum  # str, 버스번호 or 목적지명 들어옴
 
                 result_ordSearch = ordSearch(target_bus, target_arsId)
@@ -268,8 +273,6 @@ def on_message(client, userdata, msg):
                 # 에러 시 멈추고, 사용자에게 전해주는 코드 작성하기.
                 if target_busRouteId == "error":
                     print("버스번호가 아님. 목적지명이거나 정류장에 없는 버스번호임")
-                    # 넘어오는 변수 target_busRouteId -> "error", target_ord -> "해당버스번호가 존재하지 않습니다."
-                    # busFindStatus = "bigData/error/" # 체크
 
                     busList = allBusnum(target_arsId)
                     print("출발 정류장에 들어오는 모든 버스: ", busList)
@@ -279,17 +282,15 @@ def on_message(client, userdata, msg):
                     print("도착 정류장에 해당하는 모든 버스: ", thebuslist)
 
                     if thebuslist == []:
-                        lastErrorMsg = "정류소에 없는 버스번호 또는 존재하지 않은 정류소명을 말하셨습니다."
                         publish.single("eyeson/" + uuid,
-                                       "bigData/error/" + uuid + "/" + lastErrorMsg,
+                                       "bigData/error/",
                                        hostname="15.164.46.54")  # 데이터 전송
-                        # publish 어떤 거 줄지 생각.
 
                     else:
                         print("오류없이 잘 빠져나옴. 마지막 else단계")
                         waitingBusnum, waitingTime = waiting(target_arsId, thebuslist)
-                        print("후보 버스 리스트: ", waitingBusnum)
-                        print("후보 버스들의 남은 시간: ", waitingTime)
+                        # print("후보 버스 리스트: ", waitingBusnum)
+                        # print("후보 버스들의 남은 시간: ", waitingTime)
 
                         x = waitdeep(waitingTime)
                         destinationBus = waitingBusnum[(x.index(min(x)))]
@@ -303,11 +304,10 @@ def on_message(client, userdata, msg):
                         result_ordSearch = ordSearch(target_bus, target_arsId)
                         target_busRouteId = result_ordSearch[0]
                         target_ord = result_ordSearch[1]
-                        print("버스 고유번호:", target_busRouteId)
-                        print("해당 정류장 순번:", target_ord)
+                        # print("버스 고유번호:", target_busRouteId)
+                        # print("해당 정류장 순번:", target_ord)
 
                         result_arriveMessage = arriveMessage(target_stId, target_busRouteId, target_ord)
-                        # global 지움
                         arrival = result_arriveMessage[0]
                         arrival2 = result_arriveMessage[1]
                         busLicenseNum = result_arriveMessage[2]
@@ -318,13 +318,13 @@ def on_message(client, userdata, msg):
                         print("두번째 버스 도착 예정 시간:", arrival2)  # 두 번째 버스 도착 예정 시간
                         print("차량 번호:", busLicenseNum)  # 버스 차량 번호
                         print("사용자 메시지:", msgArrival)
-
                         print("버스넘버 확인", destinationBus)
+
                         publish.single("eyeson/" + uuid,
-                                       busFindStatus + uuid + "/" + destinationBus + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName,
+                                       busFindStatus + destinationBus + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName + "/" + str(target_stId)  + "/" + str(target_busRouteId) + "/" + str(target_ord),
                                        hostname="15.164.46.54")  # 데이터 전송
                         time.sleep(1)
-                        noticeOneMinute_thread(arrival, uuid)
+                        noticeOneMinute_thread(arrival, uuid, target_stId, target_busRouteId, target_ord)
 
 
                 else:
@@ -341,10 +341,9 @@ def on_message(client, userdata, msg):
                     print("차량 번호:",busLicenseNum)  # 버스 차량 번호
                     print("사용자 메시지:", msgArrival)
 
-                    publish.single("eyeson/" + uuid, busFindStatus + uuid + "/" + busNum + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName,
-                                   hostname="15.164.46.54")  # 데이터 전송
+                    publish.single("eyeson/" + uuid, busFindStatus + busNum + "/" + msgArrival + "/" + busLicenseNum + "/" + target_stationName + "/" + str(target_stId)  + "/" + str(target_busRouteId) + "/" + str(target_ord), hostname="15.164.46.54")  # 데이터 전송
                     time.sleep(1)
-                    noticeOneMinute_thread(arrival, uuid)
+                    noticeOneMinute_thread(arrival, uuid, target_stId, target_busRouteId, target_ord)
     except:
         pass
 
